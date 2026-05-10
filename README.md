@@ -66,47 +66,42 @@
 
 ---
 
-## 📥 Installation Steps
-
-### Step 1: Clone This Repository
-
-```bash
-# On VPS 1
-cd ~
-git clone https://github.com/YOUR_USERNAME/honeypot-tpot-vps1.git
-cd honeypot-tpot-vps1
-```
-
 ---
 
-** Precheck Logstash Config File
+###Precheck Logstash Config File
+```bash
 Test koneksi dari dalam container
 docker exec -it tpot_logstash curl -v http://your-external-es:9200
-
-** Cari tahu file sudah di mount
---> cat docker-compose.yml | grep logstash
+```
+###Cari tahu file sudah di mount
+```bash
+cat docker-compose.yml | grep logstash
   logstash:
     container_name: logstash
     image: ${TPOT_REPO}/logstash:${TPOT_VERSION}
      - $HOME/tpotce/docker/elk/logstash/dist/logstash.conf:/etc/logstash/logstash.conf  --> ini artinya sudah mount (sehinggaa perubahan bisa dilakukan di file config docker)
      - $HOME/tpotce/docker/elk/logstash/dist/http_input.conf:/etc/logstash/http_input.conf
-
-** Kalau default belom ada mount : 
+```
+###Kalau default belom ada mount : 
+```bash
 nano ~/tpotce/docker-compose.yml
-
-Cari bagian service logstash, tambahkan volumes:
+```
+###Cari bagian service logstash, tambahkan volumes:
 - /home/user/tpotce/data:/data          # biasanya mount default yang sudah ada
 - /home/user/tpotce/docker/elk/logstash/dist/logstash.conf:/etc/logstash/logstash.conf:ro   # tambahkan ini
 - /home/user/tpotce/docker/elk/logstash/dist/http_input.conf:/etc/logstash/http_input.conf # tambahkan ini
 
-** Periksa Mount Berhasil
+###Periksa Mount Berhasil
+```bash
 docker inspect logstash | grep -A 20 '"Mounts"'
 
 docker exec -it logstash cat /etc/logstash/logstash.conf
+```
 
-** Bandingkan dengan file host
+###Bandingkan dengan file host
+```bash
 cat ~/tpotce/docker/elk/logstash/dist/logstash.conf --> keduanya harus sama.
- 
+```
  ---
  
 
@@ -144,28 +139,31 @@ docker compose up -d logstash
 ---
 
 **Cek Index di ES VPS-2**
+```bash
 http://IP_VPS2:9200/_cat/indices?v
+```
 
-
+---
 
 ## Konfigurasi Lsyncd
 Install system packages
+```bash
 sudo apt update
 sudo apt install lsyncd
-
-## Step 2: Configure Sync Script
-
+```
+### Step 2: Configure Sync Script
+```bash
 sudo nano /etc/lsyncd/lsyncd.conf.lua
 (masukkan script lsyncd)
-
-# Konfig Direktori
+```
+### Konfig Direktori
+```bash
 sudo mkdir -p /var/log/lsyncd
 sudo touch /var/log/lsyncd/lsyncd.log
 sudo touch /var/log/lsyncd/lsyncd.status
 sudo chown -R root:root /var/log/lsyncd
-
-## Step 3: Configure SSH Key for Passwordless Login
-
+```
+### Step 3: Configure SSH Key for Passwordless Login
 ```bash
 # Generate SSH key (if not exists)
 ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa
@@ -175,29 +173,32 @@ ssh-copy-id USERNAME@VPS2_IP
 
 # Test connection
 ssh USERNAME@VPS2_IP "echo 'SSH OK'"
-# Should login without password ✅
+# Should login without password and return 'SSH OK'
 ```
 
-## Jalankan Lsyncd
+### Jalankan Lsyncd
+```bash
 sudo systemctl enable lsyncd
 sudo systemctl start lsyncd
-
+```
 ## 🔄 Real-time Sync Setup
 
 ### Manual Test
-
+```bash
 rsync -avz --progress \
   -e "ssh -i /home/user/.ssh/id_rsa" \
   /home/user/tpotce/data/ \
   user@IP:/home/user/honeypot_logs/tpot_data/
+```
 
-**Verification**
+###Verification
 # Check lsyncd is running
+```bash
 sudo systemctl status lsyncd | grep Active
 
 # Check logs for sync activity
 sudo tail -20 /var/log/lsyncd/lsyncd.log
-
+```
 ---
 
 ## 📊 Monitoring
@@ -212,7 +213,7 @@ tail -f /var/log/lsyncd/lsyncd.log
 sudo systemctl status lsyncd
 
 it should Active and Normal. 
-```
+
 systemd[1]: Starting LSB: lsyncd daemon init script...
 lsyncd[705]:  * Starting synchronization daemon lsyncd
 lsyncd[758]: 13:45:49 Normal: --- Startup, daemonizing ---
@@ -221,6 +222,7 @@ systemd[1]: Started LSB: lsyncd daemon init script.
 ```
 
 # Check data synced to VPS 2
+```bash
 ssh USERNAME@VPS2_IP "du -sh ~/honeypot_logs/tpot_data/"
 ```
 
@@ -243,67 +245,92 @@ curl http://VPS2_IP:9200/_cat/indices?v
 
 ## 🐛 Troubleshooting
 
-### Issue 1: Sync Script Not Running
+### Issue 1: Host Key Verification Failed
+Gejala : 
+Host key verification failed.
+rsync: connection unexpectedly closed (0 bytes received so far) [sender]
+rsync error: unexplained error (code 255)
 
-**Check:**
-
-```bash
-# Is script executable?
-ls -la sync_to_vps2.sh
-
-# Fix permissions
-chmod +x sync_to_vps2.sh
-
-# Test SSH connection
-ssh USERNAME@VPS2_IP
-```
-
----
-
-### Issue 2: Permission Denied on Log File
+Penyebab : SSH Host key gaada di root's known_host
 
 **Fix:**
 
 ```bash
-# Create log file with correct permissions
-touch ~/honeypot-sync.log
-chmod 644 ~/honeypot-sync.log
+# Add host key for root
+ssh-keyscan -H IP_VPS_Target | sudo tee -a /root/.ssh/known_hosts
+
+# Test SSH as root
+sudo ssh user@ip "echo OK"
+# Should print: OK ✅
+
+# Restart lsyncd
+sudo systemctl restart lsyncd
+```
+---
+
+### Issue 2: Permission Denied (Publickey)
+Gejala : 
+user@IP: Permission denied (publickey).
+
+Penyebab :
+Root doesn't have SSH key or key not authorized on VPS 2.
+
+**Fix:**
+
+```bash
+sudo ls -la /root/.ssh/id_rsa
+
+# If not exists, copy from user or create new:
+sudo mkdir -p /root/.ssh
+sudo cp ~/.ssh/id_rsa* /root/.ssh/
+sudo chown -R root:root /root/.ssh
+sudo chmod 600 /root/.ssh/id_rsa
+
+# 2. Copy public key to VPS 2
+sudo ssh-copy-id -i /root/.ssh/id_rsa.pub user@IP
+
+# 3. Test connection
+sudo ssh user@IP "echo OK"
+
+# 4. Restart lsyncd
+sudo systemctl restart lsyncd
 ```
 
 ---
 
-### Issue 3: Logstash Dual Output Not Working
+### Issue 3: Real-time sync not working
 
 **Check:**
 
 ```bash
-# View Logstash config
-docker exec logstash cat /usr/share/logstash/pipeline/logstash.conf
+# 1. Check if lsyncd is actually running
+ps aux | grep lsyncd | grep -v grep
 
-# Check Logstash errors
-docker logs logstash | grep -i error
+# 2. Check recent activity in logs
+sudo tail -50 /var/log/lsyncd/lsyncd.log
 
-# Restart Logstash
-cd ~/tpotce
-docker-compose restart logstash
+# Look for:
+# "Rsyncing list" ✅ - Good, syncing
+# "Normal: Finished a list" ✅ - Good
+# No recent entries ❌ - Not detecting changes
+# Errors ❌ - Check specific error
+```
+**Fix:**
+```bash 
+sudo systemctl restart lsyncd
+
+# Create test file to trigger sync
+sudo touch /home/user/tpotce/data/test_sync_$(date +%s).txt
+
+# Wait 10 seconds
+sleep 10
+
+# Check logs
+sudo tail -20 /var/log/lsyncd/lsyncd.log
+# Should show sync activity ✅
+
+# Check on VPS 2
+ssh emanueldananjayakusu@34.50.109.118 "ls -la ~/honeypot_logs/tpot_data/test_sync*"
 ```
 
 ---
-
-### Issue 4: Data Not Syncing
-
-**Check:**
-
-```bash
-# Is inotify watching correctly?
-ps aux | grep inotifywait
-
-# Check source directory exists
-ls -la /home/YOUR_USER/tpotce/data/
-
-# Check network connectivity
-ping VPS2_IP
-
-# Check SSH key
-ssh -i ~/.ssh/id_rsa USERNAME@VPS2_IP
-```
